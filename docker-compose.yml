@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # The Application Database (for user data, audit trails, and risk logs)
+  postgres:
+    image: postgres:15-alpine
+    container_name: finguard_postgres
+    environment:
+      POSTGRES_USER: finguard_admin
+      POSTGRES_PASSWORD: finguard_secure_password
+      POSTGRES_DB: finguard_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  # The High-Speed Asynchronous Message Queue
+  redis:
+    image: redis:7-alpine
+    container_name: finguard_redis
+    ports:
+      - "6379:6379"
+
+  # Enterprise-Grade Object Storage Vault (S3 Compatible API)
+  minio:
+    image: minio/minio:latest
+    container_name: finguard_minio
+    ports:
+      - "9000:9000"       # S3 API Endpoint
+      - "9001:9001"       # Web Console GUI
+    environment:
+      MINIO_ROOT_USER: finguard_vault
+      MINIO_ROOT_PASSWORD: vault_secure_password
+    command: server /data --console-address ":9001"
+    volumes:
+      - miniodata:/data
+
+volumes:
+  pgdata:
+  miniodata:
