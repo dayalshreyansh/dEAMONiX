@@ -10,21 +10,24 @@ import fitz  # PyMuPDF
 import numpy as np
 from dotenv import load_dotenv
 
-# 1. Load Infrastructure Coordinates
-load_dotenv()
-print("DEBUG PASSWORD:", os.getenv('POSTGRES_PASSWORD'))
+# Optional: Import easyocr or pytesseract for image-based text fallback
+try:
+    import easyocr
+    reader = easyocr.Reader(['en'])
+except ImportError:
+    reader = None
 
-# 2. Establish Distributed Message Fabric Loop
+load_dotenv()
+
 r = redis.Redis(
     host=os.getenv('REDIS_HOST', 'localhost'),
     port=int(os.getenv('REDIS_PORT', 6379)),
     decode_responses=True,
-    health_check_interval=30,  # Docker socket persistent verification
+    health_check_interval=30,
     socket_timeout=60,        
     socket_connect_timeout=15
 )
 
-# 3. Synchronize Enterprise Vault Credentials
 s3 = boto3.client('s3',
     endpoint_url=os.getenv('MINIO_ENDPOINT', 'http://localhost:9000'),
     aws_access_key_id=os.getenv('MINIO_ACCESS_KEY'),
@@ -32,7 +35,6 @@ s3 = boto3.client('s3',
 )
 BUCKET_NAME = os.getenv('MINIO_BUCKET_NAME', 'finguard-documents')
 
-# ==================== NEW VERHOEFF CRYPTOGRAPHIC MATRICES ====================
 verhoeff_d = (
     (0,1,2,3,4,5,6,7,8,9), (1,2,3,4,0,6,7,8,9,5), (2,3,4,0,1,7,8,9,5,6),
     (3,4,0,1,2,8,9,5,6,7), (4,0,1,2,3,9,5,6,7,8), (5,9,8,7,6,0,4,3,2,1),
@@ -45,35 +47,51 @@ verhoeff_p = (
     (2,7,9,3,8,0,6,4,1,5), (7,0,4,6,9,1,3,2,5,8)
 )
 
-def validate_aadhaar_verhoeff(aadhaar_number):
+def validate_aadhaar_verhoeff(number_str):
     """Executes the Verhoeff checksum algorithm to verify structural authenticity."""
     c = 0
-    reversed_num = str(aadhaar_number)[::-1]
+    reversed_num = str(number_str)[::-1]
     for i, item in enumerate(reversed_num):
         c = verhoeff_d[c][verhoeff_p[i % 8][int(item)]]
     return c == 0
 
-def process_identity_document(document_text):
-    """Extracts and verifies structural identity compliance."""
-    print("   🔍 Scanning for valid 12-digit structural identity hashes...")
-    
-    # Regex to find standard 12-digit formats (e.g., "1234 5678 9012" or "123456789012")
-    potential_ids = re.findall(r'\b\d{4}\s?\d{4}\s?\d{4}\b', document_text)
-    
-    if not potential_ids:
-        return "RED", "🚨 Compliance Failure: Required 12-digit identity structure not found."
-    
-    for identity_string in potential_ids:
-        clean_number = identity_string.replace(" ", "")
-        
-        # Pass the extracted digits into the Verhoeff checksum math
-        if validate_aadhaar_verhoeff(clean_number):
-            return "GREEN", "✅ Cryptographic Verification Clear: Identity checksum verified."
-            
-    return "RED", "🚨 Fraud Alert: Identity number extracted but failed Verhoeff checksum validation."
-# ==============================================================================
+def extract_text_via_ocr(img_array):
+    """Fallback text extraction for scanned documents and flattened image PDFs."""
+    if reader is not None:
+        try:
+            results = reader.readtext(img_array, detail=0)
+            return " ".join(results).lower()
+        except Exception as e:
+            print(f"  ⚠️ OCR Engine Error: {e}")
+            return ""
+    return ""
 
-# 4. Centralized Relational Query Router
+def process_identity_document(document_text):
+    """Extracts and verifies structural identity compliance across multiple structural identifiers."""
+    print("    🔍 Scanning for valid identity tokens and patterns...")
+    
+    # 1. Look for standard 12-digit identities
+    potential_12_digits = re.findall(r'\b\d{4}\s?\d{4}\s?\d{4}\b', document_text)
+    
+    # 2. Look for standard Tax Identification Formats (PAN Card pattern)
+    potential_pan_ids = re.findall(r'\b[a-z]{5}[0-9]{4}[a-z]{1}\b', document_text)
+    
+    # Validation Execution Loop
+    if "pan" in document_text or potential_pan_ids:
+        if potential_pan_ids:
+            return "GREEN", f"✅ Financial Tax ID Verified: Format matching standard identifier sequence detected ({potential_pan_ids[0].upper()})."
+        else:
+            return "RED", "🚨 Fraud Alert: Document context references standard Tax ID but valid character sequences are absent."
+
+    if potential_12_digits:
+        for identity_string in potential_12_digits:
+            clean_number = identity_string.replace(" ", "")
+            if validate_aadhaar_verhoeff(clean_number):
+                return "GREEN", "✅ Cryptographic Verification Clear: System checksum validated successfully."
+        return "RED", "🚨 Fraud Alert: Identity number extracted but failed mathematical checksum validation."
+                
+    return "RED", "🚨 Compliance Failure: Required government identity structural patterns not found."
+
 def get_db_connection():
     return psycopg2.connect(
         dbname=os.getenv('POSTGRES_DB'),
@@ -84,25 +102,20 @@ def get_db_connection():
     )
 
 def evaluate_final_loan_package(cursor, application_id):
-    """Compiles traditional CIBIL scores with forensic risk vectors across child nodes."""
     print(f"🔄 [Orchestration Engine] Aggregating final metrics for Bundle Package: {application_id}")
     
-    # Extract Parent Financial Bureau Metrics
     cursor.execute("SELECT cibil_score FROM loan_applications WHERE id = %s", (application_id,))
     bureau_row = cursor.fetchone()
     if not bureau_row:
         print(f"   ❌ [Underwriting Error] Parent application {application_id} not found.")
         return
         
-    # TYPE PROTECTION: Safely force the score into a pure Python integer
     cibil_score = int(float(str(bureau_row[0])))
     print(f"   📊 [Bureau Analysis] Extracted Applicant Bureau CIBIL State: {cibil_score}")
 
-    # Inspect all child jobs associated with this parent contract block
     cursor.execute("SELECT status, math_status, visual_tamper_score FROM forensic_jobs WHERE application_id = %s", (application_id,))
     jobs = cursor.fetchall()
     
-    # Asynchronous Checkpoint: Ensure all elements in the application bundle have landed safely
     if any(job[0] in ['QUEUED', 'PROCESSING'] for job in jobs):
         print("   ⏳ Outstanding operational slots are still processing in the background. Postponing aggregation.")
         return
@@ -112,7 +125,6 @@ def evaluate_final_loan_package(cursor, application_id):
 
     for job in jobs:
         status, math_status, visual_tamper_score = job
-        # Catch explicit failures or explicit red flags
         if status == 'FAILED' or math_status == 'RED':
             document_tampering_detected = True
         if visual_tamper_score:
@@ -123,19 +135,17 @@ def evaluate_final_loan_package(cursor, application_id):
             except ValueError:
                 pass
 
-    # Safe Scope Initialization Defaults
     final_risk_matrix = "GREEN"
     final_app_status = "PROCESSING"
     composite_credit_score = cibil_score
 
-    if document_tampering_detected:
-        # Critical Incident Protocol: Fraud detected during image math or accounting audits
+    # Bank-Grade Trigger: If visual anomaly threshold exceeds 35% or manual math is failed
+    if document_tampering_detected or max_visual_tamper > 35.0:
         final_risk_matrix = "RED"
-        final_app_status = "UNDER_REVIEW"  # Force human verification loop fallback
-        composite_credit_score = max(300, cibil_score - 300)  # Penalize profile score
+        final_app_status = "UNDER_REVIEW"  
+        composite_credit_score = max(300, cibil_score - 300)  
         print("   🚨 [Fraud Alert] Active Manipulation Identified! Escalating bundle to Human-In-The-Loop review.")
     else:
-        # File integrity authenticated. Defer downstream directly to credit policy thresholds.
         if cibil_score >= 750:
             final_risk_matrix = "GREEN"
             final_app_status = "APPROVED"
@@ -146,7 +156,6 @@ def evaluate_final_loan_package(cursor, application_id):
             final_risk_matrix = "RED"
             final_app_status = "REJECTED"
 
-    # Synchronize evaluation arrays straight into the ledger
     cursor.execute(
         """
         UPDATE loan_applications 
@@ -156,40 +165,35 @@ def evaluate_final_loan_package(cursor, application_id):
         (final_app_status, final_risk_matrix, composite_credit_score, application_id)
     )
     print(f"   🏆 [Underwriting Complete] System Verdict: {final_app_status} | Operational Risk: {final_risk_matrix} | Rating: {composite_credit_score}")
+    
     payload = {
         "applicationId": application_id,
         "status": final_app_status,
         "riskMatrix": final_risk_matrix,
         "creditScore": composite_credit_score
     }
-    # Send message across Redis fabric channel
     r.publish('finguard_updates', json.dumps(payload))
     print(f"📡 [Fabric Stream] Dispatched broadcast payload for package packet: {application_id}")
 
 def inspect_pdf_metadata(pdf_document):
-    """Scrapes hidden binary metadata tags to identify illegal software manipulation footprints."""
-    print("   🕵️‍♂️  [Metadata Forensics] Extracting binary structural tags...")
+    print("    🕵️‍♂️  [Metadata Forensics] Extracting binary structural tags...")
     metadata = pdf_document.metadata
     
-    # List of unauthorized software strings often used to counterfeit financial records
     fraudulent_software_agents = [
         "photoshop", "canvas", "canva", "illustrator", "coreldraw", 
-        "ilovepdf", "pdf2go", "sodapdf", "wondershare", "nitropdf"
+        "ilovepdf", "pdf2go", "sodapdf", "wondershare", "nitropdf", "gimp"
     ]
     
-    # Target binary metadata fields to scrape
     creator = str(metadata.get("creator", "")).lower()
     producer = str(metadata.get("producer", "")).lower()
     
     print(f"      [Metadata Profile] Creator Tool: '{metadata.get('creator')}' | Producer: '{metadata.get('producer')}'")
     
-    # Scan fields for unauthorized software match signatures
     for agent in fraudulent_software_agents:
         if agent in creator or agent in producer:
-            log_msg = f"🚨 Metadata Tamper Flagged: File mutated by illicit design agent ({agent})."
-            return "RED", log_msg
+            return "RED", f"🚨 Metadata Tamper Flagged: File mutated by illicit cloud editing software agent ({agent})."
             
-    return "GREEN", "Metadata Validation: Origin signatures match native print streams."
+    return "GREEN", "Metadata Validation: Origin signatures match native system print streams."
 
 def process_document(job_id, object_key):
     print(f"\n🔍 [Forensics Engine] Initiating Ingestion on Job Slot: {job_id}")
@@ -202,22 +206,19 @@ def process_document(job_id, object_key):
         db_conn = get_db_connection()
         cursor = db_conn.cursor()
 
-        # 1. Look up the record and check if it actually exists
         cursor.execute("SELECT application_id FROM forensic_jobs WHERE id = %s", (job_id,))
         row = cursor.fetchone()
         
         if not row:
-            print(f"   ⚠️  [Database Desync] Job ID {job_id} was not found in this worker's database view. Skipping underwriting.")
+            print(f"   ⚠️  [Database Desync] Job ID {job_id} was not found. Skipping.")
             return
             
         application_id = row[0]
 
-        # 2. Progress State Synchronization
         cursor.execute("UPDATE forensic_jobs SET status = 'PROCESSING' WHERE id = %s", (job_id,))
         cursor.execute("UPDATE loan_applications SET overall_status = 'PROCESSING', updated_at = CURRENT_TIMESTAMP WHERE id = %s", (application_id,))
         db_conn.commit()
 
-        # 3. Download Asset from Vault Repository
         s3.download_file(BUCKET_NAME, object_key, local_pdf_path)
         print("   📥 Stream extracted from vault storage repository.")
         
@@ -227,71 +228,81 @@ def process_document(job_id, object_key):
             print("   ❌ Format Verification Failed: Structural mapping invalid or data stream corrupted.")
             return
 
-        # ==================== METADATA SCRAM DEFENSE LAYER ====================
+        # 1. Metadata Inspection Block
         metadata_status, metadata_log = inspect_pdf_metadata(pdf_document)
+        
+        # 2. Extract Document Image Frame array
+        first_page = pdf_document[0]
+        pix = first_page.get_pixmap()
+        img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+        if pix.n == 3:
+            img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+        elif pix.n == 4:
+            img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGR)
+
+        # 3. Enhanced Text Extraction Layer (Native Extract -> Fallback OCR)
+        document_text = first_page.get_text("text").strip().lower()
+        if len(document_text) < 15:
+            print("   ⚠️  Native text matrix empty or non-indexable. Running Fallback OCR Pipeline...")
+            document_text = extract_text_via_ocr(img_array)
+
         if metadata_status == "RED":
             print(f"   {metadata_log}")
-            # Intercept immediately! Fail the file check on metadata grounds alone
             math_status = "RED"
             math_log = metadata_log
-        # ==========================================================================
         else:
-            first_page = pdf_document[0]
-            document_text = first_page.get_text("text").lower()
-            
-            # --- AUTOMATED TAXONOMY ROUTING AND COMPLIANCE ENTRY CHECKS ---
+            # Taxonomy Inference
             inferred_type = "UNKNOWN_UNSTRUCTURED"
-            if any(token in document_text for token in ["passport", "license", "identity", "dob", "gender", "aadhaar", "pan"]):
+            if any(token in document_text for token in ["passport", "license", "identity", "dob", "gender", "aadhaar", "uidai", "pan", "permanent account"]):
                 inferred_type = "GOVT_IDENTITY"
-            elif any(token in document_text for token in ["statement", "balance", "ledger", "overdraft", "account"]):
+            elif any(token in document_text for token in ["statement", "balance", "ledger", "overdraft", "account", "transaction"]):
                 inferred_type = "BANK_STATEMENT"
-            elif any(token in document_text for token in ["paystub", "payslip", "earnings statement", "w-2", "salary"]):
+            elif any(token in document_text for token in ["paystub", "payslip", "earnings statement", "w-2", "salary", "provident"]):
                 inferred_type = "PAYSTUB"
             print(f"   🏷️  [Structural Inference] Target Taxonomy Determined As: {inferred_type}")
 
-            # CLOSED-GATE SECURITY: Default to RED. Documents must explicitly prove compliance.
             math_status = "RED"
             math_log = "🚨 Document Compliance Failure: Unrecognized structure or format unreadable."
 
-            # --- VERHOEFF INJECTION HERE ---
             if inferred_type == "GOVT_IDENTITY":
                 math_status, math_log = process_identity_document(document_text)
 
             elif inferred_type in ["BANK_STATEMENT", "PAYSTUB"]:
                 print("   📊 Executing Cross-Field Semantic Accounting Audits...")
-                gross_match = re.search(r'(gross|total earnings|basic)\s*(?:salary|pay)?\s*[:\-\$]*\s*([\d,]+\.?\d*)', document_text)
-                tax_match   = re.search(r'(tax|deductions|tds|withholding)\s*[:\-\$]*\s*([\d,]+\.?\d*)', document_text)
-                net_match   = re.search(r'(net|take home|net pay|amount paid)\s*[:\-\$]*\s*([\d,]+\.?\d*)', document_text)
+                gross_match = re.search(r'(gross|total earnings|basic|earnings)\s*(?:salary|pay)?\s*[:\-\$]*\s*([\d,]+\.?\d*)', document_text)
+                tax_match   = re.search(r'(tax|deductions|tds|withholding|total deduction)\s*[:\-\$]*\s*([\d,]+\.?\d*)', document_text)
+                net_match   = re.search(r'(net|take home|net pay|amount paid|net salary)\s*[:\-\$]*\s*([\d,]+\.?\d*)', document_text)
 
                 if gross_match and tax_match and net_match:
                     gross_val = float(gross_match.group(2).replace(',', ''))
                     tax_val   = float(tax_match.group(2).replace(',', ''))
                     net_val   = float(net_match.group(2).replace(',', ''))
                     
-                    if abs((gross_val - tax_val) - net_val) > 0.01:
+                    if abs((gross_val - tax_val) - net_val) > 1.0: # Uniform threshold allowance buffer
                         math_status = "RED"
-                        math_log = "🚨 Semantic Calculation Fraud Flagged: Cross-field equations are logically inconsistent."
+                        math_log = f"🚨 Semantic Calculation Fraud: Ledger formulas are inconsistent. Gross ({gross_val}) - Deductions ({tax_val}) does not equate to Net Pay ({net_val})."
                     else:
                         math_status = "GREEN"
-                        math_log = "Semantic Math Audit: Calculation parameters verified structurally."
+                        math_log = "Semantic Math Audit: Structural calculation ledger formulas verified completely."
                 else:
                     math_status = "RED"
-                    math_log = "🚨 Fraud Warning: Required financial layout structures are missing or omitted."
+                    math_log = "🚨 Fraud Warning: Required financial calculation rows (Gross, Deductions, or Net Pay) are missing."
 
-        # OpenCV Computer Vision Micro-Forensic Execution Block 
-        pix = first_page.get_pixmap()
-        img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-        if pix.n == 3:
-            img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-        
-        gray = cv2.cvtColor(img_array, cv2.COLOR_BGR2GRAY)
-        laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-        visual_score = float(max(0.0, min(100.0, (150.0 - laplacian_var) / 1.5)))
-
-        cv2.imwrite("temp_ela.jpg", img_array, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        # 4. Bank-Grade Error Level Analysis (ELA) Execution Block
+        # Compress temporary asset at targeted threshold quality
+        cv2.imwrite("temp_ela.jpg", img_array, [cv2.IMWRITE_JPEG_QUALITY, 90])
         compressed_img = cv2.imread("temp_ela.jpg")
+        
+        # Calculate matrix absolute pixel difference map
         ela_difference = cv2.absdiff(img_array, compressed_img)
-        _, ela_heatmap = cv2.threshold(cv2.cvtColor(ela_difference, cv2.COLOR_BGR2GRAY), 20, 255, cv2.THRESH_BINARY)
+        
+        # Isolate localized manipulation discrepancies using deviation metrics instead of Laplacian variance
+        mean_diff, std_diff = cv2.meanStdDev(ela_difference)
+        visual_score = float(std_diff[0][0] * 10.0) # Scaling distribution spread to reflect anomalous changes
+        visual_score = max(0.0, min(100.0, visual_score))
+        
+        # Amplify contrast thresholding to generate clear high-definition visual heatmaps for underwriter dashboard
+        _, ela_heatmap = cv2.threshold(cv2.cvtColor(ela_difference, cv2.COLOR_BGR2GRAY), 12, 255, cv2.THRESH_BINARY)
         
         if os.path.exists("temp_ela.jpg"):
             os.remove("temp_ela.jpg")
@@ -300,10 +311,8 @@ def process_document(job_id, object_key):
         proof_key = f"proofs/{job_id}.png"
         s3.upload_file(proof_filename, BUCKET_NAME, proof_key, ExtraArgs={'ContentType': 'image/png'})
 
-        # Explicitly close file handlers so Windows releases its lock
         pdf_document.close()
 
-        # Synchronize individual document forensic fields
         cursor.execute(
             """
             UPDATE forensic_jobs 
@@ -314,31 +323,28 @@ def process_document(job_id, object_key):
             (inferred_type, proof_key, math_status, math_log, visual_score, job_id)
         )
         db_conn.commit()
-        print("   ✅ Forensic Child Record Synced. Launching underwriting compiler check...")
+        print("    ✅ Forensic Child Record Synced. Launching underwriting compiler check...")
 
         evaluate_final_loan_package(cursor, application_id)
         db_conn.commit()
 
     except Exception as e:
-        print(f"   ❌ System Processing Interrupted on Core Node: {e}")
+        print(f"    ❌ System Processing Interrupted on Core Node: {e}")
         if db_conn and cursor:
             cursor.execute("UPDATE forensic_jobs SET status = 'FAILED' WHERE id = %s", (job_id,))
             db_conn.commit()
     finally:
-        # Safer cleanup loop that handles Windows OS locks gracefully
         if cursor: cursor.close()
         if db_conn: db_conn.close()
         
-        time.sleep(0.2) # Gives the OS a tiny window to completely free memory threads
+        time.sleep(0.2)
         try:
             if os.path.exists(local_pdf_path): os.remove(local_pdf_path)
             if os.path.exists(proof_filename): os.remove(proof_filename)
-        except OSError as e:
-            print(f"   🧹 [Windows File Lock Warning]: Temporary cache file will be cleared on next event cycle: {e.strerror}")
+        except OSError:
+            pass
 
-# 5. Long-Polling Broker Connection Execution
 def process_application_bundle(application_id):
-    """Fetches all documents tied to an application and processes them sequentially."""
     print(f"\n📦 [Bundle Ingestion] Received Application Package: {application_id}")
     db_conn = None
     cursor = None
@@ -346,17 +352,15 @@ def process_application_bundle(application_id):
         db_conn = get_db_connection()
         cursor = db_conn.cursor()
 
-        # Find all queued documents for this specific application
         cursor.execute("SELECT id, object_key FROM forensic_jobs WHERE application_id = %s AND status = 'QUEUED'", (application_id,))
         jobs = cursor.fetchall()
 
         if not jobs:
-            print(f"   ⚠️ No queued documents found in the database for Application {application_id}.")
+            print(f"    ⚠️ No queued documents found for Application {application_id}.")
             return
 
-        print(f"   📑 Found {len(jobs)} documents in bundle. Initiating sequential forensics...")
+        print(f"    📑 Found {len(jobs)} documents in bundle. Initiating forensics...")
 
-        # Process each document found in the database
         for job in jobs:
             job_id, object_key = job
             process_document(job_id, object_key)
@@ -367,17 +371,13 @@ def process_application_bundle(application_id):
         if cursor: cursor.close()
         if db_conn: db_conn.close()
 
-# 5. Long-Polling Broker Connection Execution
-print("🎧 [Worker Cluster Operational] Tracking microservices architecture messages...")
+print("\n🎧 [Worker Cluster Operational] Tracking microservices architecture messages...")
 while True:
     try:
-        # Listening to the exact queue name Node is pushing to
         result = r.blpop('forensic_tasks', timeout=5) 
         if result:
             queue_name, job_data_str = result
             payload = json.loads(job_data_str)
-            
-            # Node sends: { "applicationId": "...", "userId": "...", "timestamp": ... }
             application_id = payload.get('applicationId')
             
             if application_id:

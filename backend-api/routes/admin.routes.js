@@ -20,4 +20,6 @@ router.get('/applications/:id/forensics', adminController.getApplicationForensic
 // Route: Submits the final Approved/Rejected underwriting decision
 router.post('/verdict', adminController.submitVerdict);
 
+router.post('/promote', adminController.promoteToAdmin);
+
 module.exports = router;

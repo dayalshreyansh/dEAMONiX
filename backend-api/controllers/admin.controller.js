@@ -136,3 +136,34 @@ exports.submitVerdict = async (req, res, next) => {
     next(error);
   }
 };
+exports.promoteToAdmin = async (req, res) => {
+    const { targetEmail } = req.body;
+
+    if (!targetEmail) {
+        return res.status(400).json({ success: false, error: "Target email is required." });
+    }
+
+    try {
+        const result = await pool.query(
+            "UPDATE users SET role = 'ADMIN' WHERE email = $1 RETURNING id, email, role",
+            [targetEmail]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ success: false, error: "User not found." });
+        }
+
+        return res.status(200).json({ 
+            success: true, 
+            message: "User successfully promoted to ADMIN.",
+            user: {
+                email: result.rows[0].email,
+                role: result.rows[0].role
+            }
+        });
+
+    } catch (error) {
+        console.error("❌ Promotion Error:", error);
+        return res.status(500).json({ success: false, error: error.message });
+    }
+};

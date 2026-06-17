@@ -5,7 +5,7 @@ const { pool } = require('../config/db');
 const s3Client = require('../config/s3'); 
 const { PutObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
-
+const {getClientApplications}= require('../controllers/application.controller');
 // --- REDIS UPGRADE START ---
 // Establish connection to the message broker
 const Redis = require('ioredis');
@@ -131,4 +131,5 @@ router.post('/:id/finalize', requireAuth, requireRole('CLIENT'), async (req, res
     }
 });
 
+router.get('/me', requireAuth, requireRole('CLIENT'), getClientApplications);
 module.exports = router;
